@@ -10,8 +10,8 @@
 // 现役上报接线点（唯一四处，勿在别处直写）：src/server.ts 三处装配（文本 LLM onCall / 视觉 recordVisionCall /
 // 图片 usageRecorder）+ src/publish-agent/roles/image-generator.ts 的图片生成出口；保留清理随表主人走（§4.6.5 第 9 项）。
 import pg from 'pg';
-import { resolveEnvPgConfig } from '../kernel/pg-config.js';
-import type { SchemaEnsurer } from '../kernel/schema-capability-contract.js';
+import { resolveEnvPgConfig } from 'aidcp-kernel/kernel/pg-config.js';
+import type { SchemaEnsurer } from 'aidcp-kernel/kernel/schema-capability-contract.js';
 
 const { Pool } = pg;
 

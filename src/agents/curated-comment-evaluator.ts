@@ -19,9 +19,9 @@
 
 import { BaseRole } from './base-role.js';
 import type { RoleOptions } from './base-role.js';
-import type { NoteData } from '../kernel/note-detail.js';
+import type { NoteData } from 'aidcp-kernel/kernel/note-detail.js';
 import type { RoleName } from '../event-bus/types.js';
-import { topicKeysFromTitle } from '../kernel/valuable-comment-types.js';
+import { topicKeysFromTitle } from 'aidcp-kernel/kernel/valuable-comment-types.js';
 import { passesCommentResonance, resolveCuratedGateConfig } from '../publish-agent/curated-gate.js';
 
 /** 评论评估角色只需精选库的「评论归档」口（窄接口，便于测试桩）。 */

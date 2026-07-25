@@ -12,11 +12,11 @@ import {
   type VisualFrameSpec,
   type VisualStyleBible,
   type VisualStyleCluster,
-} from '../kernel/visual-reference-types.js';
+} from 'aidcp-kernel/kernel/visual-reference-types.js';
 import {
   buildVisualReferenceSetPrompt,
   buildVisualReferenceSpecialistPrompt,
-} from '../kernel/visual-reference-prompts.js';
+} from 'aidcp-kernel/kernel/visual-reference-prompts.js';
 
 // 两个纯视觉文本指令构建已抬入 kernel（src/kernel/visual-reference-prompts.ts，
 // change decouple-behavior-class-ports）；此处等值再导出，既有导入方无感、行为逐字不变。

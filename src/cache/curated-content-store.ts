@@ -21,9 +21,9 @@
 import pg from 'pg';
 // DEFAULT_PG_CONFIG 的真实归属是 kernel（pg-config.ts），pg-anchor-cache 只是再导出；content
 // 直连 kernel（content→kernel 恒允许），取值逐字不变，消去 content→automation 这一跨边界豁免。
-import { DEFAULT_PG_CONFIG } from '../kernel/pg-config.js';
-import type { DelegatedExecutionTarget, TriggeredPublishRefsReader } from '../kernel/delegated-task-types.js';
-import type { ReferenceVisualAnalysis } from '../kernel/visual-reference-types.js';
+import { DEFAULT_PG_CONFIG } from 'aidcp-kernel/kernel/pg-config.js';
+import type { DelegatedExecutionTarget, TriggeredPublishRefsReader } from 'aidcp-kernel/kernel/delegated-task-types.js';
+import type { ReferenceVisualAnalysis } from 'aidcp-kernel/kernel/visual-reference-types.js';
 import type { VisualAnalysisAnchor } from '../publish-agent/visual-reference-analyzer.js';
 import { normalizeReferenceVisualAnalysis } from '../publish-agent/visual-reference-analyzer.js';
 import {
@@ -31,11 +31,11 @@ import {
   type SourcePublishedAtPrecision,
   type SourcePublishedAtStatus,
   type SourcePublishedTime,
-} from '../time/source-published-time.js';
-import type { SchemaEnsurer } from '../kernel/schema-capability-contract.js';
+} from 'aidcp-kernel/time/source-published-time.js';
+import type { SchemaEnsurer } from 'aidcp-kernel/kernel/schema-capability-contract.js';
 // 硬编码 `'public.'` 收口到唯一解析点（change cloud-schema-migration-executor 任务 5.5 / D8 第 4 条）：
 // 改 search_path 救不了写死在字面量里的 schema 名，搬 schema 时它会静默指错地方。
-import { qualifiedObjectName } from '../kernel/schema-name.js';
+import { qualifiedObjectName } from 'aidcp-kernel/kernel/schema-name.js';
 // 精选纯数据模型类型已提到 kernel（发布管线闭包共导）；本文件保留 SQL / 存储类 / normalize 读写函数。
 // re-export 保持既有 `from '../cache/curated-content-store'` 的类型导入面逐字不变。
 import type {
@@ -63,8 +63,8 @@ import type {
   CuratedClientCreationStatus,
   CuratedClientSort,
   CuratedFacets,
-} from '../kernel/curated-content-types.js';
-import { CuratedContentUnavailableError } from '../kernel/curated-content-types.js';
+} from 'aidcp-kernel/kernel/curated-content-types.js';
+import { CuratedContentUnavailableError } from 'aidcp-kernel/kernel/curated-content-types.js';
 export { CuratedContentUnavailableError };
 export type {
   CuratedSourceContentType,
@@ -91,7 +91,7 @@ export type {
   CuratedClientCreationStatus,
   CuratedClientSort,
   CuratedFacets,
-} from '../kernel/curated-content-types.js';
+} from 'aidcp-kernel/kernel/curated-content-types.js';
 
 const { Pool } = pg;
 

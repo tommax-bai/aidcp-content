@@ -21,9 +21,9 @@ import type {
 } from './types.js';
 import { IMAGE_CATEGORIES } from './types.js';
 import { categorySafetyInstruction, formatContentVisualCategoryBrief } from './content-visual-brief.js';
-import type { Soul } from '../kernel/soul-types.js';
-import { writingLanguageInstruction } from '../kernel/writing-language.js';
-import { buildContentVisualExcerpt, buildCoverCardCopyPrompt } from '../kernel/cover-card-copy-prompt.js';
+import type { Soul } from 'aidcp-kernel/kernel/soul-types.js';
+import { writingLanguageInstruction } from 'aidcp-kernel/kernel/writing-language.js';
+import { buildContentVisualExcerpt, buildCoverCardCopyPrompt } from 'aidcp-kernel/kernel/cover-card-copy-prompt.js';
 
 // 封面文字卡文案构建与有界正文摘录（纯物）已抬入 kernel（src/kernel/cover-card-copy-prompt.ts，
 // change decouple-behavior-class-ports）；此处等值再导出，既有导入方无感、行为逐字不变。

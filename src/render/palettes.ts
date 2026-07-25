@@ -9,11 +9,11 @@
  * 对比度红线：全表 标题/背景 与 胶囊文字/胶囊底 ≥ 4.5:1，由离线单测全表校验。
  */
 
-import type { PaletteKey, LayoutVariant, Decoration } from '../kernel/text-card-style.js';
+import type { PaletteKey, LayoutVariant, Decoration } from 'aidcp-kernel/kernel/text-card-style.js';
 
 // 色板键 / 版式 / 装饰三个联合的权威在 kernel（text-card-style.ts），供发布管线纯类型闭包共导；
 // 本文件保留色板 hex 数据与确定性选取函数，并 re-export 类型保持既有 `from './palettes'` 导入面不变。
-export type { PaletteKey, LayoutVariant, Decoration } from '../kernel/text-card-style.js';
+export type { PaletteKey, LayoutVariant, Decoration } from 'aidcp-kernel/kernel/text-card-style.js';
 
 /** 色板：浅底高对比家族（键仅用于审计与测试断言，不进卡面）。 */
 export interface Palette {

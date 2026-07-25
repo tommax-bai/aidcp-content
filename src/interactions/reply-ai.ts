@@ -13,15 +13,15 @@ import {
   type RiskReviewerInput,
   type RiskReviewerOutput,
   type RiskTag,
-} from '../kernel/interaction-types.js';
+} from 'aidcp-kernel/kernel/interaction-types.js';
 import {
   buildInteractionReplyPrompt,
   requiresKnowledgeAnswer,
   type InteractionReplyInput,
   type InteractionReplyRole,
-} from '../kernel/interaction-reply-prompt.js';
+} from 'aidcp-kernel/kernel/interaction-reply-prompt.js';
 
-export type { AiFallback, AiStepResult } from '../kernel/interaction-types.js';
+export type { AiFallback, AiStepResult } from 'aidcp-kernel/kernel/interaction-types.js';
 // 纯 prompt 构建段（含 requiresKnowledgeAnswer 判定与输入/角色类型）已抬入 kernel
 // （src/kernel/interaction-reply-prompt.ts，change decouple-behavior-class-ports）；此处等值再导出，
 // 既有导入方无感、行为逐字不变。本文件保留 LLM 调用类、解析与纠正 prompt（依赖 LlmClient / setTimeout）。

@@ -4,11 +4,11 @@ import type {
   VisualAuditMode,
   VisualAuditRisks,
   VisualAuditScores,
-} from '../kernel/visual-reference-types.js';
+} from 'aidcp-kernel/kernel/visual-reference-types.js';
 import {
   buildVisualFidelityAuditPrompt,
   type VisualAuditInput,
-} from '../kernel/visual-fidelity-audit-prompt.js';
+} from 'aidcp-kernel/kernel/visual-fidelity-audit-prompt.js';
 
 // 审核输入模型与纯文本指令构建已抬入 kernel（src/kernel/visual-fidelity-audit-prompt.ts，
 // change decouple-behavior-class-ports）；此处等值再导出，既有导入方无感、行为逐字不变。

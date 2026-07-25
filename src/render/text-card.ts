@@ -41,13 +41,13 @@ import type {
   TextCardBackgroundPattern,
   TextCardBulletPresentation,
   TextCardSourceStyle,
-} from '../kernel/text-card-style.js';
+} from 'aidcp-kernel/kernel/text-card-style.js';
 export type {
   TextCardBackgroundTreatment,
   TextCardBackgroundPattern,
   TextCardBulletPresentation,
   TextCardSourceStyle,
-} from '../kernel/text-card-style.js';
+} from 'aidcp-kernel/kernel/text-card-style.js';
 import {
   DEFAULT_FONT_ASSETS_DIR,
   createTextMetrics,

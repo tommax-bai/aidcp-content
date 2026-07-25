@@ -12,9 +12,9 @@
 
 import { BaseRole } from './base-role.js';
 import type { RoleOptions } from './base-role.js';
-import type { NoteData } from '../kernel/note-detail.js';
+import type { NoteData } from 'aidcp-kernel/kernel/note-detail.js';
 import type { RoleName } from '../event-bus/types.js';
-import { topicKeysFromTitle, type ValuableCommentInput } from '../kernel/valuable-comment-types.js';
+import { topicKeysFromTitle, type ValuableCommentInput } from 'aidcp-kernel/kernel/valuable-comment-types.js';
 
 export interface ValuableCommentArchivistOptions extends RoleOptions {
   getNoteData: (noteId: string) => NoteData | null;

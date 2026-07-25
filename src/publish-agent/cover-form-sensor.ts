@@ -23,7 +23,7 @@ import {
 } from '../cache/curated-content-store.js';
 import type { VisionLlmClient, VisionChatMessage } from '../llm/vision.js';
 import type { ReferenceImageSnapshot } from './types.js';
-import { buildCoverFormSensePrompt } from '../kernel/cover-form-sense-prompt.js';
+import { buildCoverFormSensePrompt } from 'aidcp-kernel/kernel/cover-form-sense-prompt.js';
 
 // 纯视觉判定指令已抬入 kernel（src/kernel/cover-form-sense-prompt.ts，change decouple-behavior-class-ports）；
 // 此处等值再导出，既有导入方无感、行为逐字不变。

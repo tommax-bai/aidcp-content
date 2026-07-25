@@ -9,7 +9,7 @@ import type {
   VisualFrameSpec,
   VisualGenerationRoute,
   VisualReferenceBinding,
-} from '../../kernel/visual-reference-types.js';
+} from 'aidcp-kernel/kernel/visual-reference-types.js';
 import type { ChatLlmClient } from '../../llm/qwen.js';
 import { deriveTextCardSourceStyle } from '../text-card-source-style.js';
 import {

@@ -22,7 +22,7 @@
 import { BaseRole } from './base-role.js';
 import type { RoleOptions } from './base-role.js';
 import type { NoteDetailData, RoleName } from '../event-bus/types.js';
-import { topicKeysFromTitle } from '../kernel/valuable-comment-types.js';
+import { topicKeysFromTitle } from 'aidcp-kernel/kernel/valuable-comment-types.js';
 import { passesResonance, resolveCuratedGateConfig } from '../publish-agent/curated-gate.js';
 import type {
   CuratedObservation,

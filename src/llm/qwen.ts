@@ -20,8 +20,8 @@ import { type ThinkingMode } from '../config/role-catalog.js';
 // LlmCallOpts（不含 LlmClient / ChatLlmClient 等含供应商语义的标识符）析出到 kernel
 // （change decouple-llm-lang-interaction-contracts），供 automation 侧多个角色 type-only 共导、消跨边界边。
 // 本文件对既有导入方保持等值再导出。LlmClient / ChatLlmClient 因门禁 §4.7 禁止 kernel 内出现该标识符而留本文件（content）。
-import type { LlmCallOpts } from '../kernel/llm-contract.js';
-export type { LlmCallOpts } from '../kernel/llm-contract.js';
+import type { LlmCallOpts } from 'aidcp-kernel/kernel/llm-contract.js';
+export type { LlmCallOpts } from 'aidcp-kernel/kernel/llm-contract.js';
 
 /** 通用文本 LLM 客户端接口（与 edge 侧 selector.LlmClient 同形，便于迁移）。只需补全。 */
 export interface LlmClient {

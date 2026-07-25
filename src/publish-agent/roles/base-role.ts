@@ -1,6 +1,6 @@
 import type { PipelineContext } from '../pipeline-context.js';
 import type { PipelineFields } from '../types.js';
-import type { PipelineLogSink } from '../../kernel/pipeline-log-contract.js';
+import type { PipelineLogSink } from 'aidcp-kernel/kernel/pipeline-log-contract.js';
 
 export interface RoleConfig {
   name: string;

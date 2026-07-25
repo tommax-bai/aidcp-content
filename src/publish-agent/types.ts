@@ -3,4 +3,4 @@
  * automation 三边 type-only 共导。本文件保留旧导入面 `from '../publish-agent/types.js'` 逐字不变
  * （re-export），content 层内部消费方无需改动；跨边界消费方直接从 kernel 导入以消去跨层依赖。
  */
-export * from '../kernel/publish-pipeline-types.js';
+export * from 'aidcp-kernel/kernel/publish-pipeline-types.js';

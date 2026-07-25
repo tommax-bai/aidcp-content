@@ -5,4 +5,4 @@
  * `from '../publish-agent/content-visual-brief.js'` 逐字不变（re-export），content 层内部消费方无感；
  * 跨边界消费方直接从 kernel 导入以消去跨层依赖。
  */
-export * from '../kernel/content-visual-brief.js';
+export * from 'aidcp-kernel/kernel/content-visual-brief.js';

@@ -18,7 +18,7 @@ import {
   normImageProvider,
   type ImageProviderId,
   type ImageProviderMeta,
-} from '../kernel/image-provider-registry.js';
+} from 'aidcp-kernel/kernel/image-provider-registry.js';
 export {
   DEFAULT_IMAGE_PROVIDER,
   IMAGE_PROVIDERS,

@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
-import { DEFAULT_PG_CONFIG } from '../kernel/pg-config.js';
-import { RETIRED_ACCOUNT_ID } from '../kernel/account-identity.js';
-import type { AccountPlatformReader } from '../kernel/platform-types.js';
+import { DEFAULT_PG_CONFIG } from 'aidcp-kernel/kernel/pg-config.js';
+import { RETIRED_ACCOUNT_ID } from 'aidcp-kernel/kernel/account-identity.js';
+import type { AccountPlatformReader } from 'aidcp-kernel/kernel/platform-types.js';
 import type { ObjectStore } from '../storage/object-store.js';
-import type { SchemaEnsurer } from '../kernel/schema-capability-contract.js';
+import type { SchemaEnsurer } from 'aidcp-kernel/kernel/schema-capability-contract.js';
 
 const { Pool } = pg;
 

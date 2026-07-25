@@ -20,7 +20,7 @@ import type {
   VisualReferenceBinding,
   VisualReferenceBindingItem,
   VisualSlotAudit,
-} from '../../kernel/visual-reference-types.js';
+} from 'aidcp-kernel/kernel/visual-reference-types.js';
 
 /**
  * ImageGenerator — 配图「执行」（change publish-multi-image：单图 → 并行多图）。
