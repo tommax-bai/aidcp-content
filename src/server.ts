@@ -72,6 +72,7 @@ import { TriggeredPublishRefsHttpClient } from 'aidcp-transport/transport/trigge
 import { registerCuratedContentRoutes } from 'aidcp-transport/transport/curated-content-http.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
+import { registerPersonaGeneratorCommandRoutes } from 'aidcp-transport/transport/paired-command-http.js';
 
 import {
   QwenClient,
@@ -82,6 +83,9 @@ import {
   resolveProviderEnvKey,
 } from './llm/index.js';
 import { OpenAiCompatVisionClient, type VisionCallInfo } from './llm/vision.js';
+import { PersonaGeneratorCommandReceiver } from './llm/persona-generator-command-receiver.js';
+import { PersonaGenerator } from './agents/persona-generator.js';
+import { PERSONA_SOUL_CODEC } from './agents/persona-soul-codec.js';
 import { TokenUsageStore } from './metrics/token-usage-store.js';
 import { CuratedContentStore } from './cache/curated-content-store.js';
 import { relocateImageToStore, type ObjectStore } from './storage/object-store.js';
@@ -268,8 +272,26 @@ function requirePublishApprovalInternalToken(): string {
   return token;
 }
 
+function requireContentInternalToken(): string {
+  const envName = 'AIDCP_CONTENT_INTERNAL_TOKEN';
+  const token = readEnvString(envName);
+  if (!token || /\s/.test(token)) {
+    throw new Error(
+      `${envName}_missing_or_invalid: content PersonaGenerator command 必须显式鉴权。` +
+        '拒绝启动，绝不回落到未鉴权调用。',
+    );
+  }
+  return token;
+}
+
 async function main(): Promise<void> {
   const deploymentTarget = parseDeploymentTarget(readEnvString('AIDCP_DEPLOY_ENV'));
+  if (!deploymentTarget) {
+    throw new Error(
+      'AIDCP_DEPLOY_ENV_missing_or_invalid: content 内部 command 必须绑定 dev/ol target。',
+    );
+  }
+  const contentInternalToken = requireContentInternalToken();
   const publishApprovalInternalToken = requirePublishApprovalInternalToken();
 
   // ── ① schema 契约门（只判 content 一个属主）──────────────────────────────────────────
@@ -467,6 +489,12 @@ async function main(): Promise<void> {
       }
     },
   });
+  const personaGeneratorAuthority = new PersonaGeneratorCommandReceiver(
+    new PersonaGenerator({
+      llm,
+      soulCodec: PERSONA_SOUL_CODEC,
+    }),
+  );
 
   // 精选灵感语料（内容属主表）。去重守卫经 automation 域的窄端口问；读不到时属主侧契约是**抛**，
   // 绝不回空集合冒充「一条都没用过」（那会让每条用过的参照稿重新变成可用、同一份来稿被反复洗）。
@@ -836,11 +864,18 @@ async function main(): Promise<void> {
     `[aidcp-content] PublishOrchestrator 已就绪，角色: ${publishOrchestrator.getRoles().join(', ')}`,
   );
 
-  // ── ⑥ 对外：内部 HTTP 读 API ────────────────────────────────────────────────────────
-  // 精选库只读端点（供 api / automation 经数据网关取数）+ 发布队列状态读 + 发布生成触发。
-  // 依赖缺失时**如实告警、不注册**：绝不注册一条注定 500 的路由。
+  // ── ⑥ 对外：内部 HTTP API ──────────────────────────────────────────────────────────
+  // Persona command + 精选库只读端点 + 发布队列状态读 + 发布生成触发。
+  // 每项 capability 独立注册：精选库缺失不得连带关闭 persona 或 publish。
   const httpServer = new InternalHttpServer();
   const registered: string[] = [];
+  registerPersonaGeneratorCommandRoutes(
+    httpServer,
+    personaGeneratorAuthority,
+    contentInternalToken,
+    deploymentTarget,
+  );
+  registered.push('persona-generator');
   if (curatedContentStore) {
     registerCuratedContentRoutes(httpServer, curatedContentStore);
     registered.push('curated-content');
