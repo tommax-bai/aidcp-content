@@ -6,6 +6,16 @@ aidcp 云端拆分后的三个独立服务之一。
 - **属主数据库**：`aidcp_content`（2026-07-25 已物理拆库完成，旧共享库 `aidcp` 已 DROP）
 - **组合根段**：`segA + segB`（`AIDCP_SERVICE=content`）
 
+## 内部 HTTP 必填配置
+
+- `AIDCP_API_URL`：API owner 的内部地址。
+- `AIDCP_AUTOMATION_URL`：automation owner 的内部地址。
+- `AIDCP_PUBLISH_APPROVAL_INTERNAL_TOKEN`：content 调用
+  `publish-card-exit/write-approval-signal` 时的 Bearer caller token，必须与 API/automation
+  使用同一非空值。没有默认值或其他密钥 fallback；缺失或含空白时进程在存储初始化前拒绝启动。
+
+token 只从运行环境注入，不写入仓库，也不得打印到日志。
+
 ## 来源
 
 从 `aidcp-cloud` @ `41f2c73` 按 `boundaries/module-ownership.json` 的属主裁定切出。

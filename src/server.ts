@@ -190,12 +190,11 @@ function crossSegment<T>(
 }
 
 /**
- * 三个由**别的段**赋值的句柄。本进程不运行那两段，故它们恒为 `undefined`。
+ * 两个由**别的段**赋值的句柄。本进程不运行那两段，故它们恒为 `undefined`。
  *
  * 显式声明成一组、而不是在各调用点写 `undefined as ...`：那样每个调用点都要重复一遍类型，
  * 也看不出「这是同一批待接的跨段依赖」。批次 3/4 把它们换成真正的跨进程调用时改这里一处。
  */
-const triggerPublishDispatchOnApprove: ((requestId: string) => void) | undefined = undefined;
 const uiSnapshot:
   | { pushPublishState(accountId: string, recordId: number, state: string, title?: string): void }
   | undefined = undefined;
@@ -257,8 +256,21 @@ function requireInternalBaseUrl(envName: string, purpose: string): string {
   return url;
 }
 
+function requirePublishApprovalInternalToken(): string {
+  const envName = 'AIDCP_PUBLISH_APPROVAL_INTERNAL_TOKEN';
+  const token = readEnvString(envName);
+  if (!token || /\s/.test(token)) {
+    throw new Error(
+      `${envName}_missing_or_invalid: content 经内部 HTTP 写 publish approval 必须显式鉴权。` +
+        '拒绝启动，绝不回落到未鉴权调用。',
+    );
+  }
+  return token;
+}
+
 async function main(): Promise<void> {
   const deploymentTarget = parseDeploymentTarget(readEnvString('AIDCP_DEPLOY_ENV'));
+  const publishApprovalInternalToken = requirePublishApprovalInternalToken();
 
   // ── ① schema 契约门（只判 content 一个属主）──────────────────────────────────────────
   // MUST 跑在任何存储 init() 之前；MUST NOT 包 try/catch（吞掉它等于恢复静默假成功）。
@@ -293,7 +305,10 @@ async function main(): Promise<void> {
   const providerSecretReader = new ProviderSecretHttpClient(apiHttp);
   const publishLogWriter = new PublishLogHttpClient(apiHttp);
   const pipelineLogSink = new PipelineLogHttpClient(apiHttp);
-  const publishCardExit: PublishCardExitPort = new PublishCardExitHttpClient(apiHttp);
+  const publishCardExit: PublishCardExitPort = new PublishCardExitHttpClient(
+    apiHttp,
+    publishApprovalInternalToken,
+  );
   const reviewCardDelivery = new ReviewCardDeliveryHttpClient(apiHttp);
   const resolveReviewCardDelivery = (accountId: string) =>
     reviewCardDelivery.resolveReviewCardDelivery(accountId);
@@ -800,18 +815,6 @@ async function main(): Promise<void> {
       resolveCardChatId: publishCardExit.resolveCardChatId,
       resolveReviewCardDelivery,
       writeApprovalSignal: publishCardExit.writeApprovalSignal,
-      /**
-       * 审批通过后的下发触发由**自动化段**承接。本进程里恒缺席 ——
-       * 这是本组 cross_segment_drop 里后果最重的一处：稿件已记「已批准」却不会被发出去。
-       * 批次 3/4 把这一支换成真正的跨进程调用；在那之前它至少是**可被发现**的。
-       */
-      triggerApprovedDispatch: (requestId) =>
-        crossSegment(
-          triggerPublishDispatchOnApprove,
-          `稿件 ${requestId} 审批通过后的下发触发`,
-          '自动化段',
-          '该稿件已记为「已批准」但不会被下发（表现为「批了却没发」），须由自动化进程侧承接触发',
-        )?.(requestId),
       /** 陪伴界面推送同理由自动化段承接；一次通知里共用一次取用 —— 缺席只喊一次，别把同一个事实记两条。 */
       notifyPublishPending: (accountId, recordId, title) => {
         const snapshot = crossSegment(
