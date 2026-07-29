@@ -70,6 +70,11 @@ import { ProviderSecretHttpClient } from 'aidcp-transport/transport/provider-sec
 import { AccountPlatformHttpClient } from 'aidcp-transport/transport/account-platform-http.js';
 import { TriggeredPublishRefsHttpClient } from 'aidcp-transport/transport/triggered-publish-refs-http.js';
 import { registerCuratedContentRoutes } from 'aidcp-transport/transport/curated-content-http.js';
+// automation → content 的两条属主端口的服务端一侧。客户端一侧在 automation 仓，路由名两端共一份。
+import {
+  registerConceptPoolAuthorityRoutes,
+  registerCuratedSelectionAuthorityRoutes,
+} from 'aidcp-transport/transport/content-authority-http.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
 import { registerPersonaGeneratorCommandRoutes } from 'aidcp-transport/transport/paired-command-http.js';
@@ -88,6 +93,7 @@ import { PersonaGenerator } from './agents/persona-generator.js';
 import { PERSONA_SOUL_CODEC } from './agents/persona-soul-codec.js';
 import { TokenUsageStore } from './metrics/token-usage-store.js';
 import { CuratedContentStore } from './cache/curated-content-store.js';
+import { ConceptStore } from './cache/concept-store.js';
 import { relocateImageToStore, type ObjectStore } from './storage/object-store.js';
 import { PublishOrchestrator, FacebookPublishMediaStore } from './publish-agent/index.js';
 import { RoutingImageProvider } from './publish-agent/image-providers.js';
@@ -552,6 +558,19 @@ async function main(): Promise<void> {
     );
   }
 
+  // 概念池（内容属主表 concepts）。本进程自己**不消费**它——浏览闭环与发帖调度器都在自动化进程里，
+  // 它在这里存在的唯一理由就是给下面那组跨属主路由当属主实例。
+  // init 失败留 undefined：只关掉概念池那一组路由，automation 侧会读到具名的「不支持这个方法」而不是空池。
+  let conceptStore: ConceptStore | undefined;
+  try {
+    const cs = new ConceptStore({ schemaEnsurer: ensureCapabilitySchema, pool: contentPool });
+    await cs.init();
+    conceptStore = cs;
+    console.log('[aidcp-content] ConceptStore 已就绪（concepts 表）');
+  } catch (err) {
+    console.warn('[aidcp-content] ConceptStore 初始化失败，概念池跨进程读写不可用:', (err as Error).message);
+  }
+
   // 图片总开关：任一图片厂商密钥就绪即启用（选中厂商若缺密钥，其客户端会诚实失败 → 该张记 M 少一张、不假成功）。
   const arkRuntime = providerRuntime['volcengine'];
   const anyImageKeyPresent =
@@ -881,6 +900,31 @@ async function main(): Promise<void> {
     registered.push('curated-content');
   } else {
     console.warn('[aidcp-content] curated-content 路由未注册（精选库初始化失败）');
+  }
+  // automation → content 的两条属主端口。**各注册各的**：概念池表缺了不该连带关掉精选召回，反之亦然。
+  // 两组共用 content 的内部令牌与本进程的部署 target（DEV/OL 长期共库，target 由服务端这一侧钉死，
+  // 调用方没有任何入口能挑它）。
+  if (conceptStore) {
+    registerConceptPoolAuthorityRoutes(
+      httpServer,
+      conceptStore,
+      contentInternalToken,
+      deploymentTarget,
+    );
+    registered.push('concept-pool-authority');
+  } else {
+    console.warn('[aidcp-content] concept-pool-authority 路由未注册（ConceptStore 初始化失败）');
+  }
+  if (curatedContentStore) {
+    registerCuratedSelectionAuthorityRoutes(
+      httpServer,
+      curatedContentStore,
+      contentInternalToken,
+      deploymentTarget,
+    );
+    registered.push('curated-selection-authority');
+  } else {
+    console.warn('[aidcp-content] curated-selection-authority 路由未注册（精选库初始化失败）');
   }
   registerPublishStatusRoutes(httpServer, {
     getStatus: () => Promise.resolve(publishOrchestrator.getStatus()),
