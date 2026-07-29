@@ -22,8 +22,8 @@
   },
   "dependencies": {
     "@resvg/resvg-js": "2.6.2",
-    "aidcp-kernel": "git+ssh://git@github.com/tommax-bai/aidcp-kernel.git#c7b6a4e644d1a081fa933c5c212f98d5fc27e6b4",
-    "aidcp-transport": "git+ssh://git@github.com/tommax-bai/aidcp-transport.git#7f76d1c97dbea4a1f3e9332a4ec946a101ea7ae8",
+    "aidcp-kernel": "git+ssh://git@github.com/tommax-bai/aidcp-kernel.git#6bf06034c2205ce6a9e32aaa70929c993f7c1780",
+    "aidcp-transport": "git+ssh://git@github.com/tommax-bai/aidcp-transport.git#eeb6b3ef5b594b34840b1f6e135e5037ee86f94f",
     "ali-oss": "^6.23.0",
     "pg": "^8.13.1",
     "satori": "0.26.0"
