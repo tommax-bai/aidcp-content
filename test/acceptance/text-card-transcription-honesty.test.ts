@@ -1,12 +1,17 @@
+/**
+ * 图内文字卡转写的诚实红线（视觉调用侧）：AC-TCT-1 缺密钥不兜底不编正文，AC-TCT-2 生成提示按来源槽对齐。
+ *
+ * AC-TCT-3（能力缺席 vs 旗标关闭必须可分辨）**已移到** `text-card-transcription-absence.test.ts`：
+ * 它守的是 automation 侧角色的装配缺陷，而本文件依赖视觉客户端与生成提示（content），
+ * 两者放一起会让整个文件按跨属主判定留守 cloud、那条断言就永远进不了它要保护的仓。
+ */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { mergeBodyWithTextCardTranscription } from 'aidcp-kernel/kernel/text-card-transcription.js';
 import { OpenAiCompatVisionClient } from '../../src/llm/vision.js';
 import { buildCardSetPrompt } from '../../src/publish-agent/prompts.js';
-import {
-  createTextCardTranscriber,
-  mergeBodyWithTextCardTranscription,
-} from '../../src/publish-agent/text-card-transcriber.js';
+import { createTextCardTranscriber } from '../../src/publish-agent/text-card-transcriber.js';
 
 test('AC-TCT-1：所选视觉厂商缺密钥时不跨厂商兜底、不编正文、主路径可诚实继续', async () => {
   let fetchCalls = 0;
