@@ -381,18 +381,36 @@ async function main(): Promise<void> {
 
   // ── ④ 本地建：属内容域的出口与存储 ─────────────────────────────────────────────────
   // 密钥经窄读端口向属主域取（provider_credentials 是 api 属主表）。
-  // 「读不到 ≠ 没配」：端口契约里缺凭据回 null、读失败必须抛，这里照单体范式接住 null 回落 env。
+  // 「读不到 ≠ 没配」：端口契约里缺凭据回 null、读失败必须抛。
+  //
+  // 下面这个包装是**全进程唯一**允许接住那个抛的地方，代价是必须把两种 null 分开记账：
+  // 裸 `.catch(() => null)` 会把「属主侧根本没注册这条 route」这类接线错误，
+  // 长期伪装成「库里本来就没配」——链路悄悄走 env 回退、零信号。
+  // （这正是本 change A-3 修的活缺口：api 手写 main 此前漏注册这两条 route。）
+  const secretReadFailures: string[] = [];
+  let secretReadHits = 0;
+  const readOwnerSecret = async (provider: string, field: string): Promise<string | null> => {
+    try {
+      const value = await providerSecretReader.getSecretForRuntime(provider, field);
+      if (value) secretReadHits += 1;
+      return value;
+    } catch (error) {
+      secretReadFailures.push(`${provider}/${field}`);
+      console.warn(
+        `[aidcp-content] 厂商密钥读失败（${provider}/${field}）⇒ 本次回落 env；` +
+          `这**不代表**库里没配：${(error as Error).message}`,
+      );
+      return null;
+    }
+  };
+
   const dashscopeApiKey =
-    (await providerSecretReader
-      .getSecretForRuntime('dashscope', 'dashscope_api_key')
-      .catch(() => null)) ?? readEnvString('DASHSCOPE_API_KEY');
+    (await readOwnerSecret('dashscope', 'dashscope_api_key')) ?? readEnvString('DASHSCOPE_API_KEY');
 
   const ossAccessKeyId =
-    (await providerSecretReader.getSecretForRuntime('oss', 'access_key_id').catch(() => null)) ??
-    readEnvString('OSS_ACCESS_KEY_ID');
+    (await readOwnerSecret('oss', 'access_key_id')) ?? readEnvString('OSS_ACCESS_KEY_ID');
   const ossAccessKeySecret =
-    (await providerSecretReader.getSecretForRuntime('oss', 'access_key_secret').catch(() => null)) ??
-    readEnvString('OSS_ACCESS_KEY_SECRET');
+    (await readOwnerSecret('oss', 'access_key_secret')) ?? readEnvString('OSS_ACCESS_KEY_SECRET');
   const ossRegion = readEnvString('OSS_REGION') ?? 'oss-cn-beijing';
   const ossBucket = readEnvString('OSS_BUCKET') ?? 'aidcp';
   const ossInternal = readEnvString('OSS_INTERNAL') === 'true';
@@ -426,14 +444,21 @@ async function main(): Promise<void> {
   const providerRuntime: Record<string, { baseUrl: string; apiKey: string }> = {};
   for (const id of Object.keys(TEXT_PROVIDERS) as TextProviderId[]) {
     const meta = TEXT_PROVIDERS[id];
-    const remoteKey = await providerSecretReader
-      .getSecretForRuntime(id, meta.credentialField)
-      .catch(() => null);
+    const remoteKey = await readOwnerSecret(id, meta.credentialField);
     providerRuntime[id] = {
       baseUrl: resolveProviderBaseUrl(id),
       apiKey: remoteKey ?? resolveProviderEnvKey(id) ?? '',
     };
   }
+  // 自证行，与上面两份模型镜像那行同形：把「库内取到了几项」与「读失败了几项」当场分开说清。
+  // 读失败**不拒绝启动**（属主域抖一下就停掉整个内容进程是过度反应），但绝不许静默。
+  console.log(
+    `[aidcp-content] 库内厂商密钥读：命中 ${secretReadHits} 项` +
+      (secretReadFailures.length === 0
+        ? '，无读失败'
+        : `，读失败 ${secretReadFailures.length} 项（${secretReadFailures.join(' ')}）` +
+          ' ⇒ 这些项本次走的是 env 回退，不是「库里没配」，请查属主侧这两条 route 是否可达'),
+  );
 
   // 四层回落在属主侧已经算完，本进程只查本地镜像（**不复刻回落逻辑** —— 复刻正是两侧悄悄不一致的来源）。
   const resolveModelForRole = (role?: string): string => roleModelSelection.forRole(role).model;
