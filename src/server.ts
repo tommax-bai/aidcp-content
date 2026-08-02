@@ -80,7 +80,10 @@ import {
   registerFacebookPublishMediaAuthorityRoutes,
   registerLlmUsageRecordingAuthorityRoutes,
 } from 'aidcp-transport/transport/content-media-usage-http.js';
-import { registerReplyAiAuthorityRoutes } from 'aidcp-transport/transport/content-authority-http.js';
+import {
+  registerReplyAiAuthorityRoutes,
+  registerTextCardTranscriptionAuthorityRoutes,
+} from 'aidcp-transport/transport/content-authority-http.js';
 import { ReplyAiService } from './interactions/reply-ai.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
@@ -113,6 +116,11 @@ import {
   resolveCoverFormModel,
   resolveCoverFormProvider,
 } from './publish-agent/cover-form-sensor.js';
+import {
+  createTextCardTranscriber,
+  resolveTextCardTranscriptionModel,
+  resolveTextCardTranscriptionProvider,
+} from './publish-agent/text-card-transcriber.js';
 import {
   createVisualReferenceAnalyzer,
   resolveReferenceVisualModel,
@@ -685,6 +693,48 @@ async function main(): Promise<void> {
     getModel: resolveCoverFormModel,
     getProvider: resolveCoverFormProvider,
   });
+  // 文字卡转写的属主实例。**本进程不建它，那条路由就没法注册**——自动化侧的客户端早就建好了
+  // （连旗标取值闭包都配了），只差属主这一半；客户端在、路由不在的表现是跨进程 404，
+  // 编译期与两仓各自的测试都看不见。
+  //
+  // **判形那一档是另起一个 sensor，不是复用上面那个**（逐条照单体）：
+  //   · 旗标不同——封面感知归 `AIDCP_COVER_FORM_SENSING`，转写准入归 `AIDCP_TEXTCARD_OCR`，
+  //     复用一个会让两个能力互相牵连（开一个必须连带开另一个）；
+  //   · 回写不同——上面那个带 `annotate` 回写精选行缓存，这一档**刻意不带**。
+  // 视觉模型也分两档：判形沿用封面那档，转写走自己的模型 / 供应商解析（各自可单独换）。
+  const textCardOcrEnabled = (): boolean => process.env.AIDCP_TEXTCARD_OCR === 'true';
+  const textCardOcrProvider = (): string =>
+    resolveTextCardTranscriptionProvider(resolveCoverFormProvider);
+  const textCardOcrModel = (): string =>
+    resolveTextCardTranscriptionModel(resolveCoverFormModel);
+  const admissionFormVision = new OpenAiCompatVisionClient({
+    getModel: resolveCoverFormModel,
+    getProvider: resolveCoverFormProvider,
+    providerRuntime,
+    onCall: recordVisionCall,
+  });
+  const admissionFormSensor = createCoverFormSensor({
+    vision: admissionFormVision,
+    enabled: textCardOcrEnabled,
+    getModel: resolveCoverFormModel,
+    getProvider: resolveCoverFormProvider,
+    logger: console,
+  });
+  const textCardOcrVision = new OpenAiCompatVisionClient({
+    getModel: textCardOcrModel,
+    getProvider: textCardOcrProvider,
+    providerRuntime,
+    onCall: recordVisionCall,
+    timeoutMs: Number(process.env.AIDCP_TEXTCARD_OCR_TIMEOUT_MS ?? 120_000),
+  });
+  const textCardTranscriber = createTextCardTranscriber({
+    vision: textCardOcrVision,
+    formSensor: admissionFormSensor,
+    enabled: textCardOcrEnabled,
+    getModel: textCardOcrModel,
+    getProvider: textCardOcrProvider,
+    logger: console,
+  });
   const referenceVisualVision = new OpenAiCompatVisionClient({
     getModel: resolveReferenceVisualModel,
     getProvider: resolveReferenceVisualProvider,
@@ -711,7 +761,9 @@ async function main(): Promise<void> {
   });
   const visualFidelityAuditor = createVisualFidelityAuditor({ vision: visualAuditVision });
   const postFormProfileService = createPostImageFormProfileService({
-    senseAt: (ref, arrayIndex) => coverFormSensor.senseAt!(ref, arrayIndex),
+    // 这里曾有一个非空断言。`senseAt` 早已是必选（那个 `?` 是刻意删掉的），
+    // 断言只会把「哪天它又变回可选」这件事静音，所以去掉、让编译器说话。
+    senseAt: (ref, arrayIndex) => coverFormSensor.senseAt(ref, arrayIndex),
     enabled: () => process.env.AIDCP_POST_FORM_PROFILE === 'true',
     logger: console,
   });
@@ -1006,6 +1058,16 @@ async function main(): Promise<void> {
   );
   registerReplyAiAuthorityRoutes(httpServer, replyAi, contentInternalToken, deploymentTarget);
   registered.push('reply-ai-authority');
+
+  // 文字卡转写：属主实例见上。**无条件注册**——它不依赖任何可能初始化失败的存储，
+  // 旗标关时属主自己答「未启用」并把取值回显给客户端对账，那是**答案**，不是缺席。
+  registerTextCardTranscriptionAuthorityRoutes(
+    httpServer,
+    textCardTranscriber,
+    contentInternalToken,
+    deploymentTarget,
+  );
+  registered.push('text-card-transcription-authority');
 
   // 用量记账：**今天还没有调用方**（自动化侧的合并缓冲属 tasks 2.4d-用量，未开工）。
   // 照样注册，理由同上那段：让「对面接得住」先成立，别等写调用方时才发现路由不存在。

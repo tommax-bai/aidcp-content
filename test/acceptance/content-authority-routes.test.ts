@@ -190,20 +190,29 @@ test('搜索词样本＝创作召回的三字段投影，且计数不被填成 0
  * `pending` 那几条要写明缺什么、归哪个 task；它们**注册之后必须从 pending 里移走**，
  * 否则这条闸会自己红 —— 这就是「只许下降」的机械形态，不留空位给新的遗漏回填。
  */
-const CONTENT_AUTHORITY_REGISTRARS = {
+/**
+ * 一条登记：要么已注册，要么 pending 且**必须写清缺什么**。
+ *
+ * **刻意用具名类型标注、不写 `as const`**：pending 一条不剩时，`as const` 会把这个联合
+ * 收窄成只有 `registered` 那一枝，于是下面读 `reason` 的那一支变成 `never`、只能靠一个
+ * `as` 强转硬撑 —— 而那正是「清单只许下降」这条闸自己要防的东西（今天清零 ≠ 明天不会再加）。
+ */
+type ContentAuthorityRegistrarEntry =
+  | { state: 'registered' }
+  | { state: 'pending'; reason: string };
+
+const CONTENT_AUTHORITY_REGISTRARS: Record<string, ContentAuthorityRegistrarEntry> = {
   registerConceptPoolAuthorityRoutes: { state: 'registered' },
   registerCuratedSelectionAuthorityRoutes: { state: 'registered' },
   registerCuratedWriteAuthorityRoutes: { state: 'registered' },
   registerFacebookPublishMediaAuthorityRoutes: { state: 'registered' },
   registerLlmUsageRecordingAuthorityRoutes: { state: 'registered' },
-  // 以下两条**连属主实例都还没在本进程建**，不是漏注册一行。
-  // 注册一条拿不到属主的路由 = 把「本进程没跑这段能力」伪装成「调用成功了」，比不注册更坏。
-  registerTextCardTranscriptionAuthorityRoutes: {
-    state: 'pending',
-    reason: '本进程未构造转写器实例（类在仓里，组装根没建）；归 change 的 tasks 2.4e-content-main',
-  },
+  // 2026-08-04：转写这条从 pending 移出。属主实例已在本进程建（判形档另起一个 sensor、
+  // 视觉模型另起一档，逐条照单体），路由**无条件注册**——旗标关时属主答「未启用」并把取值
+  // 回显给客户端对账，那是**答案**、不是缺席，所以旗标不该当注册条件。
+  registerTextCardTranscriptionAuthorityRoutes: { state: 'registered' },
   registerReplyAiAuthorityRoutes: { state: 'registered' },
-} as const;
+};
 
 test('内容属主端口清单：共享包里的每一个 registrar 都已登记，且状态与组装根一致', async () => {
   const [source, transportAuthority, transportMedia] = await Promise.all([
@@ -249,10 +258,56 @@ test('内容属主端口清单：共享包里的每一个 registrar 都已登记
       assert.equal(
         sites.length,
         0,
-        `${name} 已经在组装根里注册了，但清单还写着 pending（${
-          (entry as { reason: string }).reason
-        }）—— 接好了就把它从 pending 移走，清单只许下降`,
+        `${name} 已经在组装根里注册了，但清单还写着 pending（${entry.reason}）`
+          + ' —— 接好了就把它从 pending 移走，清单只许下降',
       );
     }
   }
+});
+
+/** 结构断言一律读剥掉注释的源码：解释红线的注释本身就带着被断言的字面量。 */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+}
+
+test('文字卡转写：判形那一档是另起的 sensor，旗标与回写都与封面那档分开', async () => {
+  // 这条守的是一次看着最自然的「简化」：把转写器的判形口接到上面那个封面 sensor 上。
+  // 两个后果都不报错——① 旗标被绑在一起（开转写必须连带开封面感知，反之亦然）；
+  // ② 转写的判形结果会被写进精选行的形态缓存，而那份缓存是给封面链路用的。
+  const source = stripComments(
+    await readFile(new URL('../../src/server.ts', import.meta.url), 'utf8'),
+  );
+  assert.match(
+    source,
+    /createTextCardTranscriber\(\{[\s\S]*?formSensor: admissionFormSensor/,
+    '转写器的判形口 MUST 吃自己那个 sensor',
+  );
+  const start = source.indexOf('const admissionFormSensor = createCoverFormSensor(');
+  assert.ok(start > 0, '转写准入的判形 sensor MUST 在本进程建');
+  const block = source.slice(start, start + 400);
+  assert.match(block, /enabled: textCardOcrEnabled/, '它的旗标 MUST 是文字卡那一个');
+  assert.doesNotMatch(block, /annotate/, '它 MUST NOT 回写封面链路的形态缓存');
+  assert.match(
+    source,
+    /const coverFormSensor = createCoverFormSensor\(\{[\s\S]*?AIDCP_COVER_FORM_SENSING/,
+    '封面那档 MUST 仍由自己的旗标控',
+  );
+});
+
+test('文字卡转写：那条路由 MUST 无条件注册，别拿旗标当注册条件', async () => {
+  // 上面那条清单闸只数「注册函数被调了几次」，把调用塞进 `if (旗标)` 它一样过 —— 实测过。
+  // 而拿旗标当注册条件的后果不是「关掉这个能力」，是**换一种谎**：
+  // 客户端收到的不再是属主答的「未启用」（带取值回显、可对账），而是跨进程 404 →
+  // 被译成「对面不支持这个方法」，一个本该留给「对面版本落后」的具名原因。
+  // 所以这里按**顶层语句**判：main 体内 2 空格缩进、独占一行。
+  const source = stripComments(
+    await readFile(new URL('../../src/server.ts', import.meta.url), 'utf8'),
+  );
+  assert.match(
+    source,
+    /\n {2}registerTextCardTranscriptionAuthorityRoutes\(\n {4}httpServer,/,
+    '注册 MUST 是 main 体内的顶层语句，不许挂在任何条件下',
+  );
 });
