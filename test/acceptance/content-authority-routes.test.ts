@@ -167,3 +167,95 @@ test('搜索词样本＝创作召回的三字段投影，且计数不被填成 0
     { title: 'b', topics: [], collectCount: null },
   ]);
 });
+
+/**
+ * 「本进程该服务哪些属主端口」的清单闸 —— **只许下降**。
+ *
+ * ## 它守的是一个真发生过的事故形态，而且是最难查的那种
+ *
+ * 单体里这七组路由是**全的**，且那份代码早就写下预言：
+ * 「MUST NOT 因为『现在没人调』就不注册：那会让第 3 段写 main() 时才发现对面根本没有这条路由」。
+ * 预言成真了，只是发生在**本仓这份手写入口**上：自动化进程的真装配把四个客户端接了上去，
+ * 而本进程当时只在服务其中两组。
+ *
+ * **为什么没有任何既有机制会发现它**：客户端建得出来（构造函数只吃基址与令牌）、
+ * 调用点编译得过（类型只描述形状、不描述「对面有没有这条路由」）、两仓的测试各自全绿 ——
+ * 只有真把两个进程一起跑起来才 404，而那是**跨进程**的 404：调用方读到的是
+ * 「对面不支持这个方法」，一个本该留给「对面版本落后」的具名原因，被一次纯接线遗漏冒名顶替。
+ *
+ * ## 判据形态
+ *
+ * 清单必须**穷举**共享包里所有内容属主 registrar：新加一个而不登记 ⇒ 当场红
+ * （这条比「已登记的都注册了」更要紧 —— 漏登记才是静默的那一种）。
+ * `pending` 那几条要写明缺什么、归哪个 task；它们**注册之后必须从 pending 里移走**，
+ * 否则这条闸会自己红 —— 这就是「只许下降」的机械形态，不留空位给新的遗漏回填。
+ */
+const CONTENT_AUTHORITY_REGISTRARS = {
+  registerConceptPoolAuthorityRoutes: { state: 'registered' },
+  registerCuratedSelectionAuthorityRoutes: { state: 'registered' },
+  registerCuratedWriteAuthorityRoutes: { state: 'registered' },
+  registerFacebookPublishMediaAuthorityRoutes: { state: 'registered' },
+  registerLlmUsageRecordingAuthorityRoutes: { state: 'registered' },
+  // 以下两条**连属主实例都还没在本进程建**，不是漏注册一行。
+  // 注册一条拿不到属主的路由 = 把「本进程没跑这段能力」伪装成「调用成功了」，比不注册更坏。
+  registerTextCardTranscriptionAuthorityRoutes: {
+    state: 'pending',
+    reason: '本进程未构造转写器实例（类在仓里，组装根没建）；归 change 的 tasks 2.4e-content-main',
+  },
+  registerReplyAiAuthorityRoutes: {
+    state: 'pending',
+    reason: '本进程未构造回复生成实例（类在 src/interactions/reply-ai.ts，组装根没建）；归 tasks 2.6',
+  },
+} as const;
+
+test('内容属主端口清单：共享包里的每一个 registrar 都已登记，且状态与组装根一致', async () => {
+  const [source, transportAuthority, transportMedia] = await Promise.all([
+    readFile(new URL('../../src/server.ts', import.meta.url), 'utf8'),
+    import('aidcp-transport/transport/content-authority-http.js'),
+    import('aidcp-transport/transport/content-media-usage-http.js'),
+  ]);
+
+  // ① 穷举：共享包导出的每一个内容属主 registrar 都 MUST 在清单里。
+  //    **这一条是本闸的重点** —— 漏登记是静默的，而漏注册至少还会在真跑时 404。
+  const exported = [
+    ...Object.keys(transportAuthority),
+    ...Object.keys(transportMedia),
+  ].filter((name) => /^register.*AuthorityRoutes$/.test(name));
+  assert.ok(exported.length > 0, '一个都没匹配到 ⇒ 命名口径变了，先修本闸');
+  for (const name of exported) {
+    assert.ok(
+      name in CONTENT_AUTHORITY_REGISTRARS,
+      `共享包新增了内容属主 registrar ${name} 而清单没登记 —— `
+        + '这正是本闸存在的理由：没人登记它，就没人会发现本进程不在服务它',
+    );
+  }
+
+  // ② 状态与组装根逐条一致。
+  const file = ts.createSourceFile(
+    'src/server.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const body = functionBody(file, 'main');
+  for (const [name, entry] of Object.entries(CONTENT_AUTHORITY_REGISTRARS)) {
+    const sites = registrarSites(body, name);
+    if (entry.state === 'registered') {
+      assert.equal(
+        sites.length,
+        1,
+        `${name} 登记为已注册，组装根里却出现 ${sites.length} 次 —— `
+          + '自动化侧已经在调它，缺了就是跨进程 404',
+      );
+    } else {
+      assert.equal(
+        sites.length,
+        0,
+        `${name} 已经在组装根里注册了，但清单还写着 pending（${
+          (entry as { reason: string }).reason
+        }）—— 接好了就把它从 pending 移走，清单只许下降`,
+      );
+    }
+  }
+});

@@ -74,7 +74,12 @@ import { registerCuratedContentRoutes } from 'aidcp-transport/transport/curated-
 import {
   registerConceptPoolAuthorityRoutes,
   registerCuratedSelectionAuthorityRoutes,
+  registerCuratedWriteAuthorityRoutes,
 } from 'aidcp-transport/transport/content-authority-http.js';
+import {
+  registerFacebookPublishMediaAuthorityRoutes,
+  registerLlmUsageRecordingAuthorityRoutes,
+} from 'aidcp-transport/transport/content-media-usage-http.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
 import { registerPersonaGeneratorCommandRoutes } from 'aidcp-transport/transport/paired-command-http.js';
@@ -951,6 +956,49 @@ async function main(): Promise<void> {
   } else {
     console.warn('[aidcp-content] curated-selection-authority 路由未注册（精选库初始化失败）');
   }
+  // ── automation → content 的另外三条属主端口 ────────────────────────────────────
+  // **它们的服务端一侧此前只活在单体里。** 单体那份注释早就预言过后果：
+  // 「MUST NOT 因为『现在没人调』就不注册：那会让第 3 段写 main() 时才发现对面根本没有这条路由」——
+  // 而这件事真的发生了，只是发生在**本仓这份手写入口**上，不是单体上：
+  // 自动化进程的真装配（批 H 第 5 片）把这三个客户端接了上去，本进程却一条都没在服务。
+  // 客户端建得出来、调用编译得过、跑起来才 404，且那是**跨进程**的 404 —— 最难查的一种。
+  //
+  // 形态照单体逐条办：**各注册各的 + 缺实例即具名 warn**。
+  // 绝不注册一条「属主不在就静默成功」的空路由：那会把「素材没被回收」画成「素材本来就没有」。
+  if (curatedContentStore) {
+    registerCuratedWriteAuthorityRoutes(
+      httpServer,
+      curatedContentStore,
+      contentInternalToken,
+      deploymentTarget,
+    );
+    registered.push('curated-write-authority');
+  } else {
+    console.warn('[aidcp-content] curated-write-authority 路由未注册（精选库初始化失败）');
+  }
+  if (facebookPublishMediaStore) {
+    registerFacebookPublishMediaAuthorityRoutes(
+      httpServer,
+      facebookPublishMediaStore,
+      contentInternalToken,
+      deploymentTarget,
+    );
+    registered.push('facebook-publish-media-authority');
+  } else {
+    console.warn(
+      '[aidcp-content] facebook-publish-media-authority 路由未注册'
+        + '（FacebookPublishMediaStore 不可用）—— 预留释放 / 标记已用 / 隔离三个写在三进程形态下会 404',
+    );
+  }
+  // 用量记账：**今天还没有调用方**（自动化侧的合并缓冲属 tasks 2.4d-用量，未开工）。
+  // 照样注册，理由同上那段：让「对面接得住」先成立，别等写调用方时才发现路由不存在。
+  registerLlmUsageRecordingAuthorityRoutes(
+    httpServer,
+    tokenUsageStore,
+    contentInternalToken,
+    deploymentTarget,
+  );
+  registered.push('llm-usage-recording-authority');
   registerPublishStatusRoutes(httpServer, {
     getStatus: () => Promise.resolve(publishOrchestrator.getStatus()),
   });
