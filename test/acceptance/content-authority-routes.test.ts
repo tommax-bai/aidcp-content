@@ -202,10 +202,7 @@ const CONTENT_AUTHORITY_REGISTRARS = {
     state: 'pending',
     reason: '本进程未构造转写器实例（类在仓里，组装根没建）；归 change 的 tasks 2.4e-content-main',
   },
-  registerReplyAiAuthorityRoutes: {
-    state: 'pending',
-    reason: '本进程未构造回复生成实例（类在 src/interactions/reply-ai.ts，组装根没建）；归 tasks 2.6',
-  },
+  registerReplyAiAuthorityRoutes: { state: 'registered' },
 } as const;
 
 test('内容属主端口清单：共享包里的每一个 registrar 都已登记，且状态与组装根一致', async () => {

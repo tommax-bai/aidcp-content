@@ -80,6 +80,8 @@ import {
   registerFacebookPublishMediaAuthorityRoutes,
   registerLlmUsageRecordingAuthorityRoutes,
 } from 'aidcp-transport/transport/content-media-usage-http.js';
+import { registerReplyAiAuthorityRoutes } from 'aidcp-transport/transport/content-authority-http.js';
+import { ReplyAiService } from './interactions/reply-ai.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
 import { registerPersonaGeneratorCommandRoutes } from 'aidcp-transport/transport/paired-command-http.js';
@@ -990,6 +992,21 @@ async function main(): Promise<void> {
         + '（FacebookPublishMediaStore 不可用）—— 预留释放 / 标记已用 / 隔离三个写在三进程形态下会 404',
     );
   }
+  // 互动回复生成：**属主实例本该就建在本进程**。单体那份代码已经把它从自动化段挪到内容段，
+  // 理由逐字是「内容进程因此拿不到它、那条路由永远注册不上」—— 本仓这份手写入口此前漏了同一步。
+  // 它只要两样：模型客户端 + 单步超时，两样这里都有。
+  //
+  // ⚠️ **缺它的后果不是「回复质量差一点」**：自动化侧的互动能力对回复生成是
+  // 「缺席则整条能力不组装」，而**跨进程 404 不等于缺席** —— 客户端在、路由不在，
+  // 于是能力照常组装、每一次分类 / 润色 / 风险复核都拿到一个失败，
+  // 表现成「互动一直在跑但什么都没产出」。这正是要把它接上的原因。
+  const replyAi = new ReplyAiService(
+    llm,
+    Math.max(1_000, Number(process.env.AIDCP_INTERACTION_AI_TIMEOUT_MS ?? 20_000) || 20_000),
+  );
+  registerReplyAiAuthorityRoutes(httpServer, replyAi, contentInternalToken, deploymentTarget);
+  registered.push('reply-ai-authority');
+
   // 用量记账：**今天还没有调用方**（自动化侧的合并缓冲属 tasks 2.4d-用量，未开工）。
   // 照样注册，理由同上那段：让「对面接得住」先成立，别等写调用方时才发现路由不存在。
   registerLlmUsageRecordingAuthorityRoutes(
