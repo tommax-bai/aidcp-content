@@ -204,6 +204,7 @@ type ContentAuthorityRegistrarEntry =
 const CONTENT_AUTHORITY_REGISTRARS: Record<string, ContentAuthorityRegistrarEntry> = {
   registerConceptPoolAuthorityRoutes: { state: 'registered' },
   registerCuratedSelectionAuthorityRoutes: { state: 'registered' },
+  registerCuratedTargetAuthorityRoutes: { state: 'registered' },
   registerCuratedWriteAuthorityRoutes: { state: 'registered' },
   registerFacebookPublishMediaAuthorityRoutes: { state: 'registered' },
   registerLlmUsageRecordingAuthorityRoutes: { state: 'registered' },

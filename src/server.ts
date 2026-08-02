@@ -74,6 +74,7 @@ import { registerCuratedContentRoutes } from 'aidcp-transport/transport/curated-
 import {
   registerConceptPoolAuthorityRoutes,
   registerCuratedSelectionAuthorityRoutes,
+  registerCuratedTargetAuthorityRoutes,
   registerCuratedWriteAuthorityRoutes,
 } from 'aidcp-transport/transport/content-authority-http.js';
 import {
@@ -1027,8 +1028,21 @@ async function main(): Promise<void> {
       deploymentTarget,
     );
     registered.push('curated-write-authority');
+    // 委托任务的目标校验读（automation → content）。**与写口各注册各的**：口径同上一段。
+    // 它有意不复用既有那条同名的裸形态路由（`curated-content/get-one-for-account`）——
+    // 那条不做按码还原，跨进程后「精选库不可用」会被调用方读成「目标不存在」，
+    // 而委托任务恰恰要拿这个区分去决定「拒绝建任务」还是「让运营稍后重试」。
+    registerCuratedTargetAuthorityRoutes(
+      httpServer,
+      curatedContentStore,
+      contentInternalToken,
+      deploymentTarget,
+    );
+    registered.push('curated-target-authority');
   } else {
-    console.warn('[aidcp-content] curated-write-authority 路由未注册（精选库初始化失败）');
+    console.warn(
+      '[aidcp-content] curated-write-authority / curated-target-authority 路由未注册（精选库初始化失败）',
+    );
   }
   if (facebookPublishMediaStore) {
     registerFacebookPublishMediaAuthorityRoutes(
