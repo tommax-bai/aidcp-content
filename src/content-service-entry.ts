@@ -65,6 +65,10 @@ export async function runContentEntry(options: ContentEntryOptions = {}): Promis
       .close()
       .then(() => {
         logger.log('[aidcp-content] 已关停');
+        // **关停干净就必须以 0 退出。** 摘掉信号处理器之后同一次信号会落回 Node 默认处置 ⇒
+        // 143（128+SIGTERM）⇒ systemd 记成 `failed`。dev 上实测过：一次完全正常的停机
+        // 在 `systemctl status` 里显示 failed —— 「干净停下」与「崩了」从外面完全同形。
+        exit(0);
       })
       .catch((error: unknown) => {
         logger.error('[aidcp-content] 优雅关停失败：', error);
