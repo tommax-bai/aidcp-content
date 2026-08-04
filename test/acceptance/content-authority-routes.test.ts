@@ -98,7 +98,7 @@ test('组装根真的挂上了概念池与精选召回两组，且一组起不�
     true,
     ts.ScriptKind.TS,
   );
-  const body = functionBody(file, 'main');
+  const body = functionBody(file, 'startContentService');
   const concept = registrarSites(body, CONCEPT_REGISTRAR);
   const curated = registrarSites(body, CURATED_REGISTRAR);
 
@@ -245,7 +245,7 @@ test('内容属主端口清单：共享包里的每一个 registrar 都已登记
     true,
     ts.ScriptKind.TS,
   );
-  const body = functionBody(file, 'main');
+  const body = functionBody(file, 'startContentService');
   for (const [name, entry] of Object.entries(CONTENT_AUTHORITY_REGISTRARS)) {
     const sites = registrarSites(body, name);
     if (entry.state === 'registered') {
@@ -302,13 +302,21 @@ test('文字卡转写：那条路由 MUST 无条件注册，别拿旗标当注�
   // 而拿旗标当注册条件的后果不是「关掉这个能力」，是**换一种谎**：
   // 客户端收到的不再是属主答的「未启用」（带取值回显、可对账），而是跨进程 404 →
   // 被译成「对面不支持这个方法」，一个本该留给「对面版本落后」的具名原因。
-  // 所以这里按**顶层语句**判：main 体内 2 空格缩进、独占一行。
+  // 所以这里按**顶层语句**判：装配体内 2 空格缩进、独占一行。
+  // （注册现在统一经 `registerCapability(名字, () => 真注册)` 走一遍，好让「注册了什么 /
+  //   没注册什么」出自同一个数组；判据因此变成「那一句 registerCapability 是顶层的」，
+  //   不变量本身没变：它 MUST NOT 出现在任何 `if` 里。）
   const source = stripComments(
     await readFile(new URL('../../src/server.ts', import.meta.url), 'utf8'),
   );
   assert.match(
     source,
-    /\n {2}registerTextCardTranscriptionAuthorityRoutes\(\n {4}httpServer,/,
-    '注册 MUST 是 main 体内的顶层语句，不许挂在任何条件下',
+    /\n {2}registerCapability\('text-card-transcription-authority', \(\) =>\n {4}registerTextCardTranscriptionAuthorityRoutes\(/,
+    '注册 MUST 是装配体内的顶层语句，不许挂在任何条件下',
   );
+  // 反向再钉一次：那条注册不许落在任何条件分支里（缩进 >2 空格即为嵌套）。
+  const nested = source.match(
+    /\n {4,}registerCapability\('text-card-transcription-authority'/,
+  );
+  assert.equal(nested, null, '注册被嵌进了条件分支——旗标关时它会变成跨进程 404');
 });

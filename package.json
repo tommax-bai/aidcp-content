@@ -16,7 +16,7 @@
     "migrate": "tsx --env-file=.env scripts/migrate.ts",
     "boundaries:refresh": "tsx test/acceptance/helpers/boundary-record.ts refresh",
     "boundaries:census": "tsx test/acceptance/helpers/boundary-record.ts census",
-    "start": "tsx --env-file=.env src/server.ts",
+    "start": "tsx --env-file=.env src/content-service-entry.ts",
     "trigger:like": "tsx src/cli/trigger-like.ts",
     "test:feishu": "tsx --env-file=.env src/cli/test-feishu.ts"
   },

@@ -30,8 +30,6 @@
  * 而不是让它安静地什么都不做。
  */
 
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 import { parseDeploymentTarget } from 'aidcp-kernel/deployment-target.js';
@@ -47,13 +45,11 @@ import type { LlmThinkingMode as ThinkingMode } from 'aidcp-kernel/kernel/llm-co
 import type { PublishCardExitPort } from 'aidcp-kernel/kernel/publish-card-exit-port.js';
 
 import { ensureCapabilitySchema } from 'aidcp-transport/schema/schema-capability.js';
-import { runSchemaContractGate } from 'aidcp-transport/schema/schema-gate.js';
-import { loadMigrationFiles } from 'aidcp-transport/schema/migration-files.js';
-import {
-  loadMigrationOwnerScopes,
-  loadTableOwnership,
-} from 'aidcp-transport/schema/migration-owners.js';
 import { InternalHttpClient, InternalHttpServer } from 'aidcp-transport/transport/internal-http.js';
+import {
+  CONTENT_PG_OWNERS,
+  type ContentSchemaGateReceipt,
+} from './content-schema-gate-startup.js';
 import { PublishLogHttpClient } from 'aidcp-transport/transport/publish-log-http.js';
 import { PipelineLogHttpClient } from 'aidcp-transport/transport/pipeline-log-http.js';
 import { PublishCardExitHttpClient } from 'aidcp-transport/transport/publish-card-exit-http.js';
@@ -264,8 +260,11 @@ function createCuratedReferenceImageRelocator(store: ObjectStore) {
 /** 本进程内部读 API 的默认端口。与 `aidcp-cloud` 网关侧的 `DEFAULT_CONTENT_READ_API_PORT` 同值。 */
 const DEFAULT_CONTENT_READ_API_PORT = 8092;
 
-/** 本仓根目录（迁移目录与边界清单都在这里，MUST 显式传给共享包，见 migration-files.ts 文件头）。 */
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/**
+ * 就绪探活路由。**只有这一份定义**——将来若有调用方来读，从这里取常量，别在两侧各手写一次路径。
+ * （实测过的滑手形态：注册时手写一遍路径、不用共享常量，`typecheck` 完全绿，只有真跑起来才 404。）
+ */
+export const CONTENT_READINESS_ROUTE = 'internal/content/readiness';
 
 /**
  * 取一条跨进程通道的基址。**缺了直接抛**：内容进程没有它就不成立，
@@ -306,7 +305,53 @@ function requireContentInternalToken(): string {
   return token;
 }
 
-async function main(): Promise<void> {
+/**
+ * 本进程一条能力的启动结论。**注册了什么与没注册什么由同一个数组得出**——
+ * 两份各写各的清单必然漂，而漂了之后「日志说注册了」与「实际注册了」不再是同一件事。
+ */
+export interface ContentStartupCapability {
+  name: string;
+  registered: boolean;
+  /** 未注册时**必须**具名说清依赖缺在哪；已注册时留空。 */
+  reason?: string;
+}
+
+/**
+ * 启动日志里那句「注册了什么 / 没注册什么」。
+ *
+ * 缺席一律显式说出，**MUST NOT 与「已注册且空闲」同形**：跨进程调用打到一条没注册的路由拿到
+ * 的是 404，而 404 会被调用方读成「对面版本落后」——本仓已经为这件事连撞过多次。
+ */
+export function formatContentCapabilityRoster(
+  capabilities: readonly ContentStartupCapability[],
+): string {
+  const registered = capabilities.filter((entry) => entry.registered).map((entry) => entry.name);
+  const absent = capabilities.filter((entry) => !entry.registered);
+  const absentText =
+    absent.length === 0
+      ? '无'
+      : absent.map((entry) => `${entry.name}（${entry.reason ?? '原因未具名'}）`).join('、');
+  return `已注册=${registered.length === 0 ? '无' : registered.join('、')}；未注册=${absentText}`;
+}
+
+/** 本进程的运行句柄。入口靠它做优雅关停。 */
+export interface ContentService {
+  /** 内部读 API 的真实监听端口。 */
+  port: number;
+  /** 路由是否已全部注册完毕（「监听着但还在初始化」这个中间态必须可观测）。 */
+  registrationComplete(): boolean;
+  /** 优雅关停。可重复调用，恒返回同一个在途 promise。 */
+  close(): Promise<void>;
+}
+
+export async function startContentService(options: {
+  /**
+   * schema 契约门跑过了的回执。**必填、无缺省，且外部造不出来**
+   * （只能由 {@link runContentStartupSchemaGate} 返回）。门 MUST 跑在建池之前，
+   * 而「没调门」在行为上什么都不表现 ⇒ 只能由类型担保这条顺序。
+   */
+  schemaGate: ContentSchemaGateReceipt;
+}): Promise<ContentService> {
   const deploymentTarget = parseDeploymentTarget(readEnvString('AIDCP_DEPLOY_ENV'));
   if (!deploymentTarget) {
     throw new Error(
@@ -317,17 +362,42 @@ async function main(): Promise<void> {
   const publishApprovalInternalToken = requirePublishApprovalInternalToken();
 
   // ── ① schema 契约门（只判 content 一个属主）──────────────────────────────────────────
-  // MUST 跑在任何存储 init() 之前；MUST NOT 包 try/catch（吞掉它等于恢复静默假成功）。
-  // 迁移目录与属主清单**显式传本仓的**：共享包被装进 node_modules 之后，它自己那个「往上两级」
-  // 的默认基准指向的是包目录，那里没有 migrations/（漏传会撞上包里那道空目录守卫，如实抛错）。
-  await runSchemaContractGate({
-    owners: ['content'],
-    loadScopes: () =>
-      loadMigrationOwnerScopes(
-        () => loadMigrationFiles(path.join(REPO_ROOT, 'migrations')),
-        () => loadTableOwnership(path.join(REPO_ROOT, 'boundaries', 'table-ownership.json')),
-      ),
-  });
+  // 门本身已由入口在建池之前跑过（见 content-service-entry.ts）。这里只核一件事：
+  // 门判过的属主集合 MUST 与本进程真正建池的属主集合逐个吻合——对不上即拒绝启动，不是告警。
+  // 判少了：真在用的库没被校验过；判多了：在替本进程不连的库背书。
+  {
+    const judged = [...options.schemaGate.owners].sort().join(',');
+    const opened = [...CONTENT_PG_OWNERS].sort().join(',');
+    if (judged !== opened) {
+      throw new Error(
+        `schema_gate_owner_scope_mismatch: 门判了 [${judged}]，本进程建池 [${opened}]。`
+          + '两者必须一致——否则要么真在用的库没被校验，要么在替本进程不连的库背书。',
+      );
+    }
+  }
+
+  // ── ①' 先监听 ────────────────────────────────────────────────────────────────────
+  // **顺序不可倒**：探活口要在漫长的装配开始之前就能应答，否则「还在初始化」与「进程死了」
+  // 从外面完全同形——两者都是连不上那个端口。装配期间探活会如实答
+  // `registrationComplete=false` 并把当前能力清单一并给出。
+  const httpServer = new InternalHttpServer();
+  const capabilities: ContentStartupCapability[] = [];
+  let registrationComplete = false;
+  httpServer.registerBearer(CONTENT_READINESS_ROUTE, contentInternalToken, async () => ({
+    service: 'content',
+    executionTarget: deploymentTarget,
+    registrationComplete,
+    schemaGate: { mode: options.schemaGate.mode, pass: options.schemaGate.pass },
+    capabilities,
+  }));
+  const listenPort = await httpServer.listen(
+    readEnvPort('AIDCP_CONTENT_PORT') ?? DEFAULT_CONTENT_READ_API_PORT,
+  );
+  console.log(
+    `[aidcp-content] 内部读 API 已监听 127.0.0.1:${listenPort}`
+      + `（target=${deploymentTarget}；schema 门=${options.schemaGate.mode}/`
+      + `${options.schemaGate.pass ? '通过' : '未通过'}；装配进行中，路由尚未注册完）`,
+  );
 
   // ── ② 只对内容库开池 ──────────────────────────────────────────────────────────────
   // 本进程不持有 api / automation 的任何连接 —— 这就是「一个域绝不直连另一个域的数据库」在本仓的形态。
@@ -500,17 +570,9 @@ async function main(): Promise<void> {
     );
   }
 
-  const flushTokenUsageOnExit = (sig: string): void => {
-    console.log(`[aidcp-content] 收到 ${sig}，flush token 用量后退出`);
-    imageModelSelection.stop();
-    roleModelSelection.stop();
-    void Promise.race([
-      tokenUsageStore.close().catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
-    ]).finally(() => process.exit(0));
-  };
-  process.once('SIGTERM', () => flushTokenUsageOnExit('SIGTERM'));
-  process.once('SIGINT', () => flushTokenUsageOnExit('SIGINT'));
+  // 信号处理**不在这里**：它属于入口（`content-service-entry.ts`），关停动作收在下面那个
+  // `close()` 里。此前这里直接挂 `process.once` 并在 flush 完就 `process.exit(0)` ——
+  // 那条路径会绕过监听口与两个池的关停，且装配中途收到信号时它已经挂上了、却还没有东西可关。
 
   const llm = new QwenClient({
     apiKey: dashscopeApiKey, // 构造默认（仅未注入 providerRuntime 的旧路径用；生产恒走 providerRuntime）
@@ -971,45 +1033,58 @@ async function main(): Promise<void> {
   // ── ⑥ 对外：内部 HTTP API ──────────────────────────────────────────────────────────
   // Persona command + 精选库只读端点 + 发布队列状态读 + 发布生成触发。
   // 每项 capability 独立注册：精选库缺失不得连带关闭 persona 或 publish。
-  const httpServer = new InternalHttpServer();
-  const registered: string[] = [];
-  registerPersonaGeneratorCommandRoutes(
-    httpServer,
-    personaGeneratorAuthority,
-    contentInternalToken,
-    deploymentTarget,
+  // 服务端与探活口在 ①' 就已建好并起了监听；这里只往上挂业务路由。
+  // 每一族都往 `capabilities` 记一笔——**注册与未注册出自同一个数组**，
+  // 「日志说注册了」与「实际注册了」因此不可能各说各话。
+  const registerCapability = (name: string, register: () => void): void => {
+    register();
+    capabilities.push({ name, registered: true });
+  };
+  const skipCapability = (name: string, reason: string): void => {
+    capabilities.push({ name, registered: false, reason });
+    console.warn(`[aidcp-content] ${name} 路由未注册（${reason}）`);
+  };
+  registerCapability('persona-generator', () =>
+    registerPersonaGeneratorCommandRoutes(
+      httpServer,
+      personaGeneratorAuthority,
+      contentInternalToken,
+      deploymentTarget,
+    ),
   );
-  registered.push('persona-generator');
   if (curatedContentStore) {
-    registerCuratedContentRoutes(httpServer, curatedContentStore);
-    registered.push('curated-content');
+    registerCapability('curated-content', () =>
+      registerCuratedContentRoutes(httpServer, curatedContentStore),
+    );
   } else {
-    console.warn('[aidcp-content] curated-content 路由未注册（精选库初始化失败）');
+    skipCapability('curated-content', '精选库初始化失败');
   }
   // automation → content 的两条属主端口。**各注册各的**：概念池表缺了不该连带关掉精选召回，反之亦然。
   // 两组共用 content 的内部令牌与本进程的部署 target（DEV/OL 长期共库，target 由服务端这一侧钉死，
   // 调用方没有任何入口能挑它）。
   if (conceptStore) {
-    registerConceptPoolAuthorityRoutes(
-      httpServer,
-      conceptStore,
-      contentInternalToken,
-      deploymentTarget,
+    registerCapability('concept-pool-authority', () =>
+      registerConceptPoolAuthorityRoutes(
+        httpServer,
+        conceptStore,
+        contentInternalToken,
+        deploymentTarget,
+      ),
     );
-    registered.push('concept-pool-authority');
   } else {
-    console.warn('[aidcp-content] concept-pool-authority 路由未注册（ConceptStore 初始化失败）');
+    skipCapability('concept-pool-authority', 'ConceptStore 初始化失败');
   }
   if (curatedContentStore) {
-    registerCuratedSelectionAuthorityRoutes(
-      httpServer,
-      curatedContentStore,
-      contentInternalToken,
-      deploymentTarget,
+    registerCapability('curated-selection-authority', () =>
+      registerCuratedSelectionAuthorityRoutes(
+        httpServer,
+        curatedContentStore,
+        contentInternalToken,
+        deploymentTarget,
+      ),
     );
-    registered.push('curated-selection-authority');
   } else {
-    console.warn('[aidcp-content] curated-selection-authority 路由未注册（精选库初始化失败）');
+    skipCapability('curated-selection-authority', '精选库初始化失败');
   }
   // ── automation → content 的另外三条属主端口 ────────────────────────────────────
   // **它们的服务端一侧此前只活在单体里。** 单体那份注释早就预言过后果：
@@ -1021,41 +1096,43 @@ async function main(): Promise<void> {
   // 形态照单体逐条办：**各注册各的 + 缺实例即具名 warn**。
   // 绝不注册一条「属主不在就静默成功」的空路由：那会把「素材没被回收」画成「素材本来就没有」。
   if (curatedContentStore) {
-    registerCuratedWriteAuthorityRoutes(
-      httpServer,
-      curatedContentStore,
-      contentInternalToken,
-      deploymentTarget,
+    registerCapability('curated-write-authority', () =>
+      registerCuratedWriteAuthorityRoutes(
+        httpServer,
+        curatedContentStore,
+        contentInternalToken,
+        deploymentTarget,
+      ),
     );
-    registered.push('curated-write-authority');
     // 委托任务的目标校验读（automation → content）。**与写口各注册各的**：口径同上一段。
     // 它有意不复用既有那条同名的裸形态路由（`curated-content/get-one-for-account`）——
     // 那条不做按码还原，跨进程后「精选库不可用」会被调用方读成「目标不存在」，
     // 而委托任务恰恰要拿这个区分去决定「拒绝建任务」还是「让运营稍后重试」。
-    registerCuratedTargetAuthorityRoutes(
-      httpServer,
-      curatedContentStore,
-      contentInternalToken,
-      deploymentTarget,
+    registerCapability('curated-target-authority', () =>
+      registerCuratedTargetAuthorityRoutes(
+        httpServer,
+        curatedContentStore,
+        contentInternalToken,
+        deploymentTarget,
+      ),
     );
-    registered.push('curated-target-authority');
   } else {
-    console.warn(
-      '[aidcp-content] curated-write-authority / curated-target-authority 路由未注册（精选库初始化失败）',
-    );
+    skipCapability('curated-write-authority', '精选库初始化失败');
+    skipCapability('curated-target-authority', '精选库初始化失败');
   }
   if (facebookPublishMediaStore) {
-    registerFacebookPublishMediaAuthorityRoutes(
-      httpServer,
-      facebookPublishMediaStore,
-      contentInternalToken,
-      deploymentTarget,
+    registerCapability('facebook-publish-media-authority', () =>
+      registerFacebookPublishMediaAuthorityRoutes(
+        httpServer,
+        facebookPublishMediaStore,
+        contentInternalToken,
+        deploymentTarget,
+      ),
     );
-    registered.push('facebook-publish-media-authority');
   } else {
-    console.warn(
-      '[aidcp-content] facebook-publish-media-authority 路由未注册'
-        + '（FacebookPublishMediaStore 不可用）—— 预留释放 / 标记已用 / 隔离三个写在三进程形态下会 404',
+    skipCapability(
+      'facebook-publish-media-authority',
+      'FacebookPublishMediaStore 不可用 —— 预留释放 / 标记已用 / 隔离三个写在三进程形态下会 404',
     );
   }
   // 互动回复生成：**属主实例本该就建在本进程**。单体那份代码已经把它从自动化段挪到内容段，
@@ -1070,40 +1147,67 @@ async function main(): Promise<void> {
     llm,
     Math.max(1_000, Number(process.env.AIDCP_INTERACTION_AI_TIMEOUT_MS ?? 20_000) || 20_000),
   );
-  registerReplyAiAuthorityRoutes(httpServer, replyAi, contentInternalToken, deploymentTarget);
-  registered.push('reply-ai-authority');
+  registerCapability('reply-ai-authority', () =>
+    registerReplyAiAuthorityRoutes(httpServer, replyAi, contentInternalToken, deploymentTarget),
+  );
 
   // 文字卡转写：属主实例见上。**无条件注册**——它不依赖任何可能初始化失败的存储，
   // 旗标关时属主自己答「未启用」并把取值回显给客户端对账，那是**答案**，不是缺席。
-  registerTextCardTranscriptionAuthorityRoutes(
-    httpServer,
-    textCardTranscriber,
-    contentInternalToken,
-    deploymentTarget,
+  registerCapability('text-card-transcription-authority', () =>
+    registerTextCardTranscriptionAuthorityRoutes(
+      httpServer,
+      textCardTranscriber,
+      contentInternalToken,
+      deploymentTarget,
+    ),
   );
-  registered.push('text-card-transcription-authority');
 
   // 用量记账：**今天还没有调用方**（自动化侧的合并缓冲属 tasks 2.4d-用量，未开工）。
   // 照样注册，理由同上那段：让「对面接得住」先成立，别等写调用方时才发现路由不存在。
-  registerLlmUsageRecordingAuthorityRoutes(
-    httpServer,
-    tokenUsageStore,
-    contentInternalToken,
-    deploymentTarget,
+  registerCapability('llm-usage-recording-authority', () =>
+    registerLlmUsageRecordingAuthorityRoutes(
+      httpServer,
+      tokenUsageStore,
+      contentInternalToken,
+      deploymentTarget,
+    ),
   );
-  registered.push('llm-usage-recording-authority');
-  registerPublishStatusRoutes(httpServer, {
-    getStatus: () => Promise.resolve(publishOrchestrator.getStatus()),
-  });
-  registerPublishGenerationRoutes(httpServer, publishOrchestrator);
-  registered.push('publish-status', 'publish-generation');
-  const actual = await httpServer.listen(
-    readEnvPort('AIDCP_CONTENT_PORT') ?? DEFAULT_CONTENT_READ_API_PORT,
+  registerCapability('publish-status', () =>
+    registerPublishStatusRoutes(httpServer, {
+      getStatus: () => Promise.resolve(publishOrchestrator.getStatus()),
+    }),
   );
-  console.log(`[aidcp-content] 内部读 API 已监听 127.0.0.1:${actual}（${registered.join(' + ')} 端点）`);
-}
+  registerCapability('publish-generation', () =>
+    registerPublishGenerationRoutes(httpServer, publishOrchestrator),
+  );
+  registrationComplete = true;
+  console.log(
+    `[aidcp-content] 路由注册完毕，内部读 API 服务中 127.0.0.1:${listenPort}`
+      + `（${formatContentCapabilityRoster(capabilities)}）`,
+  );
 
-main().catch((err) => {
-  console.error('[aidcp-content] 启动失败:', err);
-  process.exit(1);
-});
+  let closePromise: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = (async () => {
+      // 顺序：先停对外应答，再停周期性的镜像轮询，最后 flush 用量并关池。
+      // 用量 flush 有上限等待（3s）——它不该把关停拖成不确定时长，但也不能直接丢掉。
+      await httpServer.close().catch(() => undefined);
+      imageModelSelection.stop();
+      roleModelSelection.stop();
+      await Promise.race([
+        tokenUsageStore.close().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 3_000)),
+      ]);
+      await contentPool.end().catch(() => undefined);
+      await tokenUsagePool.end().catch(() => undefined);
+    })();
+    return closePromise;
+  };
+
+  return {
+    port: listenPort,
+    registrationComplete: () => registrationComplete,
+    close,
+  };
+}
