@@ -85,6 +85,14 @@ import { ReplyAiService } from './interactions/reply-ai.js';
 import { registerPublishStatusRoutes } from 'aidcp-transport/transport/publish-status-http.js';
 import { registerPublishGenerationRoutes } from 'aidcp-transport/transport/publish-generation-http.js';
 import { registerPersonaGeneratorCommandRoutes } from 'aidcp-transport/transport/paired-command-http.js';
+import { AutomationPublishLogHttpClient } from 'aidcp-transport/transport/api-publish-interaction-http.js';
+import {
+  DraftRefinementDraftsHttpClient,
+  registerDraftRefinementQueueRoutes,
+} from 'aidcp-transport/transport/draft-refinement-http.js';
+import type { DraftRefinementDrafts } from 'aidcp-kernel/kernel/publish-draft-contract.js';
+import { DraftRefinementStore } from './publish-agent/draft-refinement.js';
+import { DraftRefinementWorker } from './publish-agent/draft-refinement-worker.js';
 
 import {
   QwenClient,
@@ -293,6 +301,23 @@ function requirePublishApprovalInternalToken(): string {
   return token;
 }
 
+/**
+ * 稿件精修 worker 打向 api 的两条路由都带 Bearer（读待审稿 / 落精修结果）。
+ * 缺令牌 MUST 拒绝启动：回落到不带令牌只会一律 401，而 401 在 worker 眼里
+ * 与「api 拒绝了这次改稿」同形 —— 每一条精修都会失败，且失败原因指向错的地方。
+ */
+function requireApiInternalToken(): string {
+  const envName = 'AIDCP_API_INTERNAL_TOKEN';
+  const token = readEnvString(envName);
+  if (!token || /\s/.test(token)) {
+    throw new Error(
+      `${envName}_missing_or_invalid: 内容进程的稿件精修 worker 经内部 HTTP 读待审稿、落精修结果。` +
+        '拒绝启动，绝不回落到未鉴权调用。',
+    );
+  }
+  return token;
+}
+
 function requireContentInternalToken(): string {
   const envName = 'AIDCP_CONTENT_INTERNAL_TOKEN';
   const token = readEnvString(envName);
@@ -360,6 +385,7 @@ export async function startContentService(options: {
   }
   const contentInternalToken = requireContentInternalToken();
   const publishApprovalInternalToken = requirePublishApprovalInternalToken();
+  const apiInternalToken = requireApiInternalToken();
 
   // ── ① schema 契约门（只判 content 一个属主）──────────────────────────────────────────
   // 门本身已由入口在建池之前跑过（见 content-service-entry.ts）。这里只核一件事：
@@ -1030,6 +1056,57 @@ export async function startContentService(options: {
     `[aidcp-content] PublishOrchestrator 已就绪，角色: ${publishOrchestrator.getRoles().join(', ')}`,
   );
 
+  // ── ⑤' 稿件精修（客户端里的「稿件精修」）─────────────────────────────────────────
+  // 队列表 `publish_draft_refinement_jobs` 属本域，worker 也跑在本进程（模型 / 出图 / 转存都在这边），
+  // 而唯一的创建 / 查询入口在 api 的客户端鉴权服务、待改的 `publish_log` 也属 api。
+  // 于是本段同时接**两个方向**：往下给 api 开队列路由，往上拿 api 的两条写读口。
+  //
+  // 初始化失败 ⇒ 具名跳过、不注册队列路由 ⇒ api 侧客户端拿到 404 而不是一条注定 500 的路由。
+  // **这一格与其他 capability 同权**：精修起不来不得连带关掉发布或概念池。
+  let draftRefinementStore: DraftRefinementStore | undefined;
+  let draftRefinementInitError: string | undefined;
+  try {
+    const store = new DraftRefinementStore({
+      executionTarget: deploymentTarget,
+      pool: contentPool,
+    });
+    await store.init();
+    // 重启会把上一轮「已认领、跑到一半」的作业留在 running 上。恢复它们是**结构性**的：
+    // 同一条作业重新加载后原样重来完全可能得到不同结果（模型 / 出图那几步是外部依赖）。
+    const recovered = await store.recoverInterruptedClaims();
+    draftRefinementStore = store;
+    console.log(
+      `[aidcp-content] DraftRefinementStore 已就绪（target=${deploymentTarget}, 回收中断认领=${recovered}）`,
+    );
+  } catch (err) {
+    draftRefinementInitError = err instanceof Error ? err.message : String(err);
+    console.warn(`[aidcp-content] DraftRefinementStore 初始化失败，稿件精修不可用: ${draftRefinementInitError}`);
+  }
+
+  // worker 的落稿写口：两个方法分别来自 api 的**两族**路由。
+  // **拼在这里、写成一个对象字面量**是有意的——`DraftRefinementDrafts` 的完整性由这处
+  // 编译期钉住（端口日后加方法，这里当场缺属性），于是传输层不必为 loadForDispatch
+  // 再挂一条同语义的路由。
+  const apiPublishLogReader = new AutomationPublishLogHttpClient(
+    apiHttp,
+    apiInternalToken,
+    deploymentTarget,
+  );
+  const apiDraftRefinementWriter = new DraftRefinementDraftsHttpClient(
+    apiHttp,
+    apiInternalToken,
+    deploymentTarget,
+  );
+  const draftRefinementDrafts: DraftRefinementDrafts = {
+    loadForDispatch: (recordId) => apiPublishLogReader.loadForDispatch(recordId),
+    refineDraft: (recordId, accountId, expectedVersion, scope, selection, patch, editor) =>
+      apiDraftRefinementWriter.refineDraft(
+        recordId, accountId, expectedVersion, scope, selection, patch, editor,
+      ),
+  };
+
+  let draftRefinementTimer: NodeJS.Timeout | undefined;
+
   // ── ⑥ 对外：内部 HTTP API ──────────────────────────────────────────────────────────
   // Persona command + 精选库只读端点 + 发布队列状态读 + 发布生成触发。
   // 每项 capability 独立注册：精选库缺失不得连带关闭 persona 或 publish。
@@ -1180,6 +1257,58 @@ export async function startContentService(options: {
   registerCapability('publish-generation', () =>
     registerPublishGenerationRoutes(httpServer, publishOrchestrator),
   );
+  // 稿件精修（方向 A：api 经这一族问本域的作业队列）。
+  if (draftRefinementStore) {
+    const store = draftRefinementStore;
+    registerCapability('draft-refinement-queue', () =>
+      registerDraftRefinementQueueRoutes(
+        httpServer,
+        store,
+        contentInternalToken,
+        deploymentTarget,
+      ),
+    );
+    // worker 与队列路由**同一个开关**：只有队列真的建起来了才有作业可跑。
+    // 出图缺 provider 不该拦住纯文字精修，故 objectStore 缺席时只降级不阻断（转存失败会
+    // 在 worker 里当场变成具名失败，不会把临时图当稳定图写进稿子）。
+    const worker = new DraftRefinementWorker({
+      store,
+      drafts: draftRefinementDrafts,
+      llm,
+      imageProvider,
+      ...(ossUploader ? { objectStore: ossUploader } : {}),
+      logger: console,
+      // 预览重推**绑在 api 那次写上**，不在这里再推一份：发布台账权威层已经为每次属主
+      // 写入产出一份单向预览（见 api 组装根 authorities.draftRefinementDrafts）。
+      // 本进程既没有 publish_log 的连接，也没有推送出口，硬推只能是又一次跨进程往返。
+      refreshPreview: () => {},
+    });
+    let pumping = false;
+    const pump = async (): Promise<void> => {
+      if (pumping) return;
+      pumping = true;
+      try {
+        // 每轮最多连续处理 3 条，防止单账号高频调整饿死事件循环；下一 tick 会继续。
+        for (let i = 0; i < 3 && await worker.processNext(`draft-refinement-${deploymentTarget}`); i += 1) {
+          /* bounded drain */
+        }
+      } catch (err) {
+        console.warn(
+          `[draft-refinement] worker pump failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        pumping = false;
+      }
+    };
+    draftRefinementTimer = setInterval(() => void pump(), 1_500);
+    draftRefinementTimer.unref?.();
+    void pump();
+  } else {
+    skipCapability(
+      'draft-refinement-queue',
+      `DraftRefinementStore 初始化失败（${draftRefinementInitError ?? '未知原因'}）`,
+    );
+  }
   registrationComplete = true;
   console.log(
     `[aidcp-content] 路由注册完毕，内部读 API 服务中 127.0.0.1:${listenPort}`
@@ -1193,6 +1322,7 @@ export async function startContentService(options: {
       // 顺序：先停对外应答，再停周期性的镜像轮询，最后 flush 用量并关池。
       // 用量 flush 有上限等待（3s）——它不该把关停拖成不确定时长，但也不能直接丢掉。
       await httpServer.close().catch(() => undefined);
+      if (draftRefinementTimer) clearInterval(draftRefinementTimer);
       imageModelSelection.stop();
       roleModelSelection.stop();
       await Promise.race([
