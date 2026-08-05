@@ -51,6 +51,11 @@ import {
   type ModelProbeWireResult,
 } from 'aidcp-transport/transport/model-probe-http.js';
 import {
+  registerPanelContentRoutes,
+  PANEL_CONTENT_MEDIA_UPLOAD_MAX_BODY_BYTES,
+} from 'aidcp-transport/transport/panel-content-http.js';
+import { createBillingPriceRefresh } from './metrics/billing-price-refresh.js';
+import {
   CONTENT_PG_OWNERS,
   type ContentSchemaGateReceipt,
 } from './content-schema-gate-startup.js';
@@ -411,7 +416,12 @@ export async function startContentService(options: {
   // **顺序不可倒**：探活口要在漫长的装配开始之前就能应答，否则「还在初始化」与「进程死了」
   // 从外面完全同形——两者都是连不上那个端口。装配期间探活会如实答
   // `registrationComplete=false` 并把当前能力清单一并给出。
-  const httpServer = new InternalHttpServer();
+  // 请求体上限显式放宽（change restore-panel-capability-wiring）：管理后台的 FB 素材上传
+  // 经接口进程转到这里，单张原图 10 MiB → Base64 约 14 MiB，默认 8 MiB 会在传输层就被砍掉，
+  // 运营看到的只是「上传失败」、看不出真实原因。本通道只在 localhost 上，对外那一跳由 Nginx 另限。
+  const httpServer = new InternalHttpServer({
+    maxBodyBytes: PANEL_CONTENT_MEDIA_UPLOAD_MAX_BODY_BYTES,
+  });
   const capabilities: ContentStartupCapability[] = [];
   let registrationComplete = false;
   httpServer.registerBearer(CONTENT_READINESS_ROUTE, contentInternalToken, async () => ({
@@ -1266,6 +1276,43 @@ export async function startContentService(options: {
   // 那条验收用「精选库守卫到 publish-status 之间不许出现 return」当代理，守的是
   // 「精选库初始化失败不得连带关掉 persona / publish」。本回调体内的 return 是内层函数的，
   // 与那条不变量无关，但会把代理打成误报。挪出该区间比放宽守卫便宜——守卫还守着它那件事。
+  // 管理后台读写本域三张表的窄口（change restore-panel-capability-wiring）：
+  // 用量成本 / 精选库 / FB 发帖素材。面板住在接口进程，这三族的事实源全在本进程。
+  //
+  // **精选库与素材库缺实例时不注册对应路由**（口径同上面几族）：注册一条「属主不在就
+  // 静默成功」的空路由，会把「精选库暂时不可用」画成「一条都没有」，而后台那一页
+  // 分不出这两件事。跨进程 404 与「没有数据」在调用方那侧类型上就不同。
+  //
+  // 账单价刷新的凭据读走本进程既有的厂商密钥客户端（事实源在接口域），不新开通道。
+  const billingPriceRefresh = createBillingPriceRefresh({
+    tokenUsage: tokenUsageStore,
+    credentials: providerSecretReader,
+    env: process.env,
+  });
+  registerCapability('panel-content', () =>
+    registerPanelContentRoutes(httpServer, {
+      usage: tokenUsageStore,
+      billingPriceRefresh,
+      ...(curatedContentStore ? { curated: curatedContentStore } : {}),
+      ...(facebookPublishMediaStore
+        ? {
+            media: {
+              list: (accountId) => facebookPublishMediaStore!.listForAccount(accountId),
+              upload: (accountId, files) => facebookPublishMediaStore!.uploadFiles(accountId, files),
+              reorder: (accountId, ids) => facebookPublishMediaStore!.reorder(accountId, ids),
+              updateSet: (accountId, setId, patch) =>
+                facebookPublishMediaStore!.updateSet(accountId, setId, patch),
+              deleteSet: (accountId, setId) =>
+                facebookPublishMediaStore!.updateSet(accountId, setId, { status: 'deleted' }),
+            },
+          }
+        : {}),
+    }),
+  );
+  if (!curatedContentStore) skipCapability('panel-content-curated', '精选库初始化失败');
+  if (!facebookPublishMediaStore) {
+    skipCapability('panel-content-media', 'FacebookPublishMediaStore 不可用');
+  }
   // 保存前模型探活（change restore-panel-capability-wiring）：管理后台三处模型写入的前置。
   // **分类必须留在本进程**——密钥缺失是个错误类，跨进程之后 `instanceof` 恒 false，
   // 在调用方那侧无论如何都还原不出来；线上传判别式结果。
