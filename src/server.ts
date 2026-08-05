@@ -47,6 +47,10 @@ import type { PublishCardExitPort } from 'aidcp-kernel/kernel/publish-card-exit-
 import { ensureCapabilitySchema } from 'aidcp-transport/schema/schema-capability.js';
 import { InternalHttpClient, InternalHttpServer } from 'aidcp-transport/transport/internal-http.js';
 import {
+  registerModelProbeRoutes,
+  type ModelProbeWireResult,
+} from 'aidcp-transport/transport/model-probe-http.js';
+import {
   CONTENT_PG_OWNERS,
   type ContentSchemaGateReceipt,
 } from './content-schema-gate-startup.js';
@@ -101,6 +105,7 @@ import {
   type TextProviderId,
   resolveProviderBaseUrl,
   resolveProviderEnvKey,
+  ProviderKeyMissingError,
 } from './llm/index.js';
 import { OpenAiCompatVisionClient, type VisionCallInfo } from './llm/vision.js';
 import { PersonaGeneratorCommandReceiver } from './llm/persona-generator-command-receiver.js';
@@ -1256,6 +1261,34 @@ export async function startContentService(options: {
   );
   registerCapability('publish-generation', () =>
     registerPublishGenerationRoutes(httpServer, publishOrchestrator),
+  );
+  // **注册点有意放在这里、不放在精选库那段之后**：`persona-generator-command-composition`
+  // 那条验收用「精选库守卫到 publish-status 之间不许出现 return」当代理，守的是
+  // 「精选库初始化失败不得连带关掉 persona / publish」。本回调体内的 return 是内层函数的，
+  // 与那条不变量无关，但会把代理打成误报。挪出该区间比放宽守卫便宜——守卫还守着它那件事。
+  // 保存前模型探活（change restore-panel-capability-wiring）：管理后台三处模型写入的前置。
+  // **分类必须留在本进程**——密钥缺失是个错误类，跨进程之后 `instanceof` 恒 false，
+  // 在调用方那侧无论如何都还原不出来；线上传判别式结果。
+  // 探活真发一次调用、真消耗 token，仍记在 `system:model_probe` 角色下，不静默丢。
+  registerCapability('model-probe', () =>
+    registerModelProbeRoutes(httpServer, {
+      probeModel: async (provider: string, model: string): Promise<ModelProbeWireResult> => {
+        try {
+          await llm.chat([{ role: 'user', content: 'ping' }], {
+            provider,
+            model,
+            timeoutMs: 8000,
+            role: 'system:model_probe',
+          });
+          return { ok: true };
+        } catch (err) {
+          if (err instanceof ProviderKeyMissingError) {
+            return { ok: false, reason: 'provider_key_missing' };
+          }
+          return { ok: false, reason: 'model_unavailable' };
+        }
+      },
+    }),
   );
   // 稿件精修（方向 A：api 经这一族问本域的作业队列）。
   if (draftRefinementStore) {
